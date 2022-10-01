@@ -24,9 +24,9 @@ import (
 	"github.com/traefik/traefik/v2/pkg/server/cookie"
 	"github.com/traefik/traefik/v2/pkg/server/provider"
 	"github.com/traefik/traefik/v2/pkg/server/service/loadbalancer/failover"
+	"github.com/traefik/traefik/v2/pkg/server/service/loadbalancer/leastconnection"
 	"github.com/traefik/traefik/v2/pkg/server/service/loadbalancer/mirror"
 	"github.com/traefik/traefik/v2/pkg/server/service/loadbalancer/wrr"
-	"github.com/traefik/traefik/v2/pkg/server/service/loadbalancer/leastconnection"
 	"github.com/vulcand/oxy/roundrobin"
 	"github.com/vulcand/oxy/roundrobin/stickycookie"
 )
@@ -97,7 +97,6 @@ func (m *Manager) BuildHTTP(rootCtx context.Context, serviceName string) (http.H
 	var lb http.Handler
 
 	switch {
-  case conf.
 	case conf.LoadBalancer != nil:
 		var err error
 		lb, err = m.getLoadBalancerServiceHandler(ctx, serviceName, conf.LoadBalancer)
@@ -377,8 +376,10 @@ func (m *Manager) getLoadBalancer(ctx context.Context, serviceName string, servi
 	logger.Debug("Creating load-balancer")
 
 	var options []roundrobin.LBOption
-
 	var cookieName string
+	var stickySession *roundrobin.StickySession
+	var lb healthcheck.BalancerHandler
+
 	if service.Sticky != nil && service.Sticky.Cookie != nil {
 		cookieName = cookie.GetName(service.Sticky.Cookie.Name, serviceName)
 
@@ -393,20 +394,24 @@ func (m *Manager) getLoadBalancer(ctx context.Context, serviceName string, servi
 		if err != nil {
 			return nil, err
 		}
-
-		options = append(options, roundrobin.EnableStickySession(roundrobin.NewStickySessionWithOptions(cookieName, opts).SetCookieValue(cv)))
-
+		stickySession = roundrobin.NewStickySessionWithOptions(cookieName, opts).SetCookieValue(cv)
+		options = append(options, roundrobin.EnableStickySession(stickySession))
 		logger.Debugf("Sticky session cookie name: %v", cookieName)
 	}
 
-	if service.LeastConnection {
+	if *service.LeastConnection {
+
 		// create a "least connection" load balancer
-		lb, err := leastconnection.New(fwd, options...)
+		var err error
+		lb, err = leastconnection.New(fwd, stickySession, nil, nil)
 		if err != nil {
 			return nil, err
 		}
+
 	} else {
-		lb, err := roundrobin.New(fwd, options...)
+
+		var err error
+		lb, err = roundrobin.New(fwd, options...)
 		if err != nil {
 			return nil, err
 		}

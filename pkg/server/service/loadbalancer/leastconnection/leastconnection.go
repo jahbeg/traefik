@@ -1,4 +1,4 @@
-package leastconnections
+package leastconnection
 
 import (
 	"fmt"
@@ -6,34 +6,11 @@ import (
 	"net/url"
 	"sync"
 
+	"github.com/traefik/traefik/v2/pkg/healthcheck"
 	"github.com/traefik/traefik/v2/pkg/log"
 	rr "github.com/vulcand/oxy/roundrobin"
 	"github.com/vulcand/oxy/utils"
 )
-
-// ErrorHandler is a functional argument that sets error handler of the server.
-func ErrorHandler(h utils.ErrorHandler) LBOption {
-	return func(s *LeastConnection) error {
-		s.errHandler = h
-		return nil
-	}
-}
-
-// EnableStickySession enable sticky session.
-func EnableStickySession(stickySession *rr.StickySession) LBOption {
-	return func(s *LeastConnection) error {
-		s.stickySession = stickySession
-		return nil
-	}
-}
-
-// LeastConnectionRequestRewriteListener is a functional argument that sets error handler of the server.
-func LeastConnectionRequestRewriteListener(rrl rr.RequestRewriteListener) LBOption {
-	return func(s *LeastConnection) error {
-		s.requestRewriteListener = rrl
-		return nil
-	}
-}
 
 // LeastConnection implements a least connection
 // load balancing strategy
@@ -48,24 +25,22 @@ type LeastConnection struct {
 	requestRewriteListener rr.RequestRewriteListener
 }
 
-// New created a new LeastConnection.
-func New(next http.Handler, opts ...LBOption) (*LeastConnection, error) {
-	rr := &LeastConnection{
-		next:          next,
-		index:         -1,
-		mutex:         &sync.Mutex{},
-		servers:       []*server{},
-		stickySession: nil,
+// New creates a new LeastConnection.
+func New(next http.Handler, stickySession *rr.StickySession, rrl rr.RequestRewriteListener, errHdl utils.ErrorHandler) (healthcheck.BalancerHandler, error) {
+	lc := &LeastConnection{
+		next:                   next,
+		index:                  -1,
+		mutex:                  &sync.Mutex{},
+		servers:                []*server{},
+		stickySession:          stickySession,
+		requestRewriteListener: rrl,
+		errHandler:             errHdl,
 	}
-	for _, o := range opts {
-		if err := o(rr); err != nil {
-			return nil, err
-		}
+
+	if lc.errHandler == nil {
+		lc.errHandler = utils.DefaultHandler
 	}
-	if rr.errHandler == nil {
-		rr.errHandler = utils.DefaultHandler
-	}
-	return rr, nil
+	return lc, nil
 }
 
 func (r *LeastConnection) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -169,7 +144,9 @@ func (r *LeastConnection) Servers() []*url.URL {
 }
 
 // UpsertServer In case if server is already present in the load balancer, returns error.
-func (r *LeastConnection) UpsertServer(u *url.URL, options ...ServerOption) error {
+func (r *LeastConnection) UpsertServer(u *url.URL, options ...rr.ServerOption) error {
+	// server options are useless since we do not care about the weight
+
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
@@ -179,21 +156,10 @@ func (r *LeastConnection) UpsertServer(u *url.URL, options ...ServerOption) erro
 
 	// if already exists shortcuts
 	if s, _ := r.findServerByURL(u); s != nil {
-		for _, o := range options {
-			if err := o(s); err != nil {
-				return err
-			}
-		}
 		return nil
 	}
 
 	srv := &server{url: utils.CopyURL(u)}
-	for _, o := range options {
-		if err := o(srv); err != nil {
-			return err
-		}
-	}
-
 	r.servers = append(r.servers, srv)
 	return nil
 }
@@ -210,12 +176,6 @@ func (r *LeastConnection) findServerByURL(u *url.URL) (*server, int) {
 	return nil, -1
 }
 
-// ServerOption provides various options for server, e.g. weight.
-type ServerOption func(*server) error
-
-// LBOption provides options for load balancer.
-type LBOption func(*LeastConnection) error
-
 // Set additional parameters for the server can be supplied when adding server.
 type server struct {
 	url *url.URL
@@ -225,14 +185,4 @@ type server struct {
 
 func sameURL(a, b *url.URL) bool {
 	return a.Path == b.Path && a.Host == b.Host && a.Scheme == b.Scheme
-}
-
-type balancerHandler interface {
-	Servers() []*url.URL
-	ServeHTTP(w http.ResponseWriter, req *http.Request)
-	ServerWeight(u *url.URL) (int, bool)
-	RemoveServer(u *url.URL) error
-	UpsertServer(u *url.URL, options ...ServerOption) error
-	NextServer() (*url.URL, error)
-	Next() http.Handler
 }
