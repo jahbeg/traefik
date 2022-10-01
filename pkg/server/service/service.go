@@ -26,6 +26,7 @@ import (
 	"github.com/traefik/traefik/v2/pkg/server/service/loadbalancer/failover"
 	"github.com/traefik/traefik/v2/pkg/server/service/loadbalancer/mirror"
 	"github.com/traefik/traefik/v2/pkg/server/service/loadbalancer/wrr"
+	"github.com/traefik/traefik/v2/pkg/server/service/loadbalancer/leastconnection"
 	"github.com/vulcand/oxy/roundrobin"
 	"github.com/vulcand/oxy/roundrobin/stickycookie"
 )
@@ -96,6 +97,7 @@ func (m *Manager) BuildHTTP(rootCtx context.Context, serviceName string) (http.H
 	var lb http.Handler
 
 	switch {
+  case conf.
 	case conf.LoadBalancer != nil:
 		var err error
 		lb, err = m.getLoadBalancerServiceHandler(ctx, serviceName, conf.LoadBalancer)
@@ -397,9 +399,17 @@ func (m *Manager) getLoadBalancer(ctx context.Context, serviceName string, servi
 		logger.Debugf("Sticky session cookie name: %v", cookieName)
 	}
 
-	lb, err := roundrobin.New(fwd, options...)
-	if err != nil {
-		return nil, err
+	if service.LeastConnection {
+		// create a "least connection" load balancer
+		lb, err := leastconnection.New(fwd, options...)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		lb, err := roundrobin.New(fwd, options...)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	lbsu := healthcheck.NewLBStatusUpdater(lb, m.configs[serviceName], service.HealthCheck)
