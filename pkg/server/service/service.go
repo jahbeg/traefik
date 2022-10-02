@@ -399,7 +399,7 @@ func (m *Manager) getLoadBalancer(ctx context.Context, serviceName string, servi
 		logger.Debugf("Sticky session cookie name: %v", cookieName)
 	}
 
-	if *service.LeastConnection {
+	if service.LeastConnection != nil && *service.LeastConnection {
 
 		// create a "least connection" load balancer
 		var err error
